@@ -14,6 +14,8 @@ const { runCollection } = require("./runner");
 const BASE        = path.resolve(__dirname, "../..");
 const COLLECTIONS = path.join(BASE, "collections");
 const ENV_FILE    = path.join(BASE, "env/environment.json");
+// Optional: path for JSON results export (used by the Python debug loop)
+const JSON_OUT    = process.env.TESTGEN_JSON_OUT || null;
 
 async function runAll() {
   const files = await glob(`${COLLECTIONS}/*.json`);
@@ -28,7 +30,7 @@ async function runAll() {
     const name = path.basename(file, ".json");
     console.log(chalk.cyan(`\n▶  ${name}`));
     try {
-      const result = await runCollection(file, ENV_FILE);
+      const result = await runCollection(file, ENV_FILE, JSON_OUT);
       totalPassed += result.passed;
       totalFailed += result.failed;
       const icon = result.failed === 0 ? chalk.green("✔") : chalk.red("✖");
@@ -53,7 +55,7 @@ async function runSingle(name) {
     process.exit(1);
   }
   console.log(chalk.cyan(`\n▶  ${name}`));
-  const result = await runCollection(filePath, ENV_FILE);
+    const result = await runCollection(filePath, ENV_FILE, JSON_OUT);
   const icon = result.failed === 0 ? chalk.green("✔") : chalk.red("✖");
   console.log(`${icon} ${result.passed}/${result.total} passed | ${result.reportPath}`);
   result.failures.forEach((f) => {

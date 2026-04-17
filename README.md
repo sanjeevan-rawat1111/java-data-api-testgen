@@ -47,7 +47,33 @@ cp .env.sample .env
 # Paste your key: OPENAI_API_KEY=AIza...
 ```
 
-### 3. Generate test collections
+### 3. Run the full pipeline (single command)
+
+```sh
+python -m testgen run
+```
+
+This runs the full **agentic loop** automatically:
+
+```
+[1/4] Generate collection via LLM  (with self-healing JSON retry)
+         ↓
+[2/4] Start services via Docker    (MySQL + Aerospike + API + Flask helper)
+         ↓
+[3/4] Run tests via Newman         (execute all collections)
+         ↓
+     Tests pass? ──yes──▶ Save final collection + open HTML report ✔
+         │ no
+         ▼
+[4/4] Send failures to LLM         (request name + error + response body)
+      LLM fixes the failing tests
+         ↓
+     Re-run Newman  ──▶  repeat up to max_debug_attempts (default: 3)
+         ↓
+     Save best collection + open HTML report
+```
+
+### Or run steps individually
 
 ```sh
 # Verify parsing (no LLM call)
@@ -56,26 +82,11 @@ python -m testgen analyze
 # Preview prompt (no LLM call)
 python -m testgen generate --dry-run
 
-# Generate → saves to collections/
+# Generate only → saves to collections/
 python -m testgen generate
-```
 
-### 4. Run the tests
-
-```sh
-# Start all services (databases + API + Flask helper)
-docker-compose up -d mysql aerospike java-data-api flask-helper
-
-# Run Newman against the generated collections
-docker-compose --profile run up newman-runner
-
-# Open the HTML report
-open runner/reports/*.html
-```
-
-Or run everything in one shot:
-```sh
-docker-compose --profile run up
+# Reuse existing collection, just run tests
+python -m testgen run --skip-generate
 ```
 
 ## Project Structure
@@ -172,6 +183,8 @@ Opens at `http://localhost:8501` with three tabs:
 ## CLI Reference
 
 ```
+python -m testgen run                             Full pipeline: generate → services → tests → report
+python -m testgen run --skip-generate            Reuse existing collection, just run tests
 python -m testgen generate                        Generate full collection → collections/
 python -m testgen generate --dry-run              Preview prompt, skip LLM
 python -m testgen generate --feature Name         Custom collection name
