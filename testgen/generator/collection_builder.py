@@ -177,3 +177,71 @@ def build_and_save_with_healing(
         "attempts":       attempts,
         "self_healed":    attempts > 1,
     }
+
+
+# ── Incremental merge ─────────────────────────────────────────────────────────
+
+def merge_collections(base_path: str, patch_path: str) -> dict:
+    """
+    Merge a patch collection into a base collection.
+
+    Strategy:
+    - For each folder in the patch, find the matching folder in base by name.
+      - If found: replace requests inside that folder that share the same name,
+        and append any brand-new requests.
+      - If not found: append the entire patch folder to base.
+    - Top-level requests (not in folders) are merged the same way.
+    """
+    with open(base_path)  as f: base  = json.load(f)
+    with open(patch_path) as f: patch = json.load(f)
+
+    base_items  = base.get("item", [])
+    patch_items = patch.get("item", [])
+
+    def item_name(item):
+        return item.get("name", "")
+
+    def is_folder(item):
+        return "item" in item
+
+    def merge_folder_items(base_folder_items: list, patch_folder_items: list) -> list:
+        """Merge two flat lists of request items by name."""
+        base_by_name = {item_name(i): i for i in base_folder_items}
+        result = list(base_folder_items)
+        for patch_item in patch_folder_items:
+            name = item_name(patch_item)
+            if name in base_by_name:
+                # Replace the matching item
+                idx = next(i for i, x in enumerate(result) if item_name(x) == name)
+                result[idx] = patch_item
+            else:
+                result.append(patch_item)
+        return result
+
+    # Build lookup of base folders by name
+    base_folders_by_name = {item_name(i): i for i in base_items if is_folder(i)}
+    result_items = list(base_items)
+
+    for patch_item in patch_items:
+        name = item_name(patch_item)
+        if is_folder(patch_item):
+            if name in base_folders_by_name:
+                # Merge requests inside matching folder
+                base_folder = base_folders_by_name[name]
+                base_folder["item"] = merge_folder_items(
+                    base_folder.get("item", []),
+                    patch_item.get("item", []),
+                )
+            else:
+                result_items.append(patch_item)
+        else:
+            # Top-level request — replace by name or append
+            names = [item_name(i) for i in result_items]
+            if name in names:
+                idx = names.index(name)
+                result_items[idx] = patch_item
+            else:
+                result_items.append(patch_item)
+
+    base["item"] = result_items
+    return base

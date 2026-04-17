@@ -172,11 +172,32 @@ Opens at `http://localhost:8501` with three tabs:
 ## CLI Reference
 
 ```
-python -m testgen generate                 Generate collections → collections/
-python -m testgen generate --dry-run       Preview prompt, skip LLM
-python -m testgen generate --feature Name  Custom collection name
-python -m testgen analyze                  Print parsed API surface
-python -m testgen validate collections/X.json
+python -m testgen generate                        Generate full collection → collections/
+python -m testgen generate --dry-run              Preview prompt, skip LLM
+python -m testgen generate --feature Name         Custom collection name
+python -m testgen generate --diff                 Incremental: only regenerate changed endpoints
+python -m testgen generate --diff --base main     Diff against a specific branch/ref
+python -m testgen analyze                         Print full parsed API surface
+python -m testgen analyze --diff                  Show only changed endpoints
+python -m testgen validate collections/X.json     Validate a generated collection
+```
+
+### Incremental generation (`--diff`)
+
+When you change an endpoint in `java-data-api`, you don't need to regenerate everything.
+`--diff` detects exactly which Java files changed, sends only those to the LLM, and
+**merges** the new test cases back into the existing collection:
+
+```sh
+# You modified DataController.java — regenerate only the affected tests
+python -m testgen generate --diff
+
+# What it does:
+# 1. git diff HEAD -- *.java  →  finds changed controller files
+# 2. Parses only those files  →  smaller, faster prompt
+# 3. Calls LLM for changed endpoints only
+# 4. Merges new test cases into collections/java-data-api-tests.json
+#    (replaces matching requests by name, appends new ones)
 ```
 
 ## LLM Configuration
