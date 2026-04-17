@@ -1,0 +1,21 @@
+# java-data-api-testgen configuration
+
+# Path to the java-data-api repository (relative to this file or absolute)
+java_data_api_path: "../java-data-api"
+
+# ── LLM ──────────────────────────────────────────────────────────────────────
+# Default: Google Gemini Flash (FREE — get key at https://aistudio.google.com/apikey)
+provider: "openai"
+model: "gemini-1.5-flash"
+base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+temperature: 0.2
+max_tokens: 8192
+
+# Self-healing retry loop
+max_retries: 3
+retry_delay_seconds: 2.0
+
+# ── Output ───────────────────────────────────────────────────────────────────
+# Generated collections land here — Newman runner picks them up automatically
+output_dir: "collections"
+default_feature_name: "java-data-api-tests"

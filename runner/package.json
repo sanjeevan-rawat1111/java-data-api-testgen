@@ -1,0 +1,15 @@
+{
+  "name": "java-data-api-testgen-runner",
+  "version": "1.0.0",
+  "description": "Newman runner for AI-generated test collections",
+  "scripts": {
+    "run:all":        "node src/cli.js --all",
+    "run:collection": "node src/cli.js --collection"
+  },
+  "dependencies": {
+    "newman":                    "^6.1.2",
+    "newman-reporter-htmlextra": "^1.23.1",
+    "glob":                      "^10.3.10",
+    "chalk":                     "^4.1.2"
+  }
+}

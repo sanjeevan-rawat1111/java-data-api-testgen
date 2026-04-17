@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+.venv/
+venv/
+
+# Generated collections — keep the placeholder, ignore generated files
+collections/*.json
+
+# Newman HTML reports
+runner/reports/*.html
+

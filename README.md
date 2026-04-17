@@ -1,0 +1,203 @@
+# java-data-api-testgen
+
+AI-powered test automation framework for [java-data-api](../java-data-api).
+
+LLM reads the Java source code → generates Postman test collections with real setup/teardown → Newman runs them against the live API in Docker.
+
+## How It Works
+
+```
+java-data-api/
+└── src/main/java/...          Java controllers, models, schema.sql
+         │
+         ▼
+  testgen/analyzer/            Parse: endpoints, models, DB schema
+         │
+         ▼
+  testgen/generator/           Build LLM prompt (with Flask helper context)
+         │                     Call LLM (Gemini / OpenAI / Groq / Ollama)
+         │                     Self-healing retry on bad JSON output
+         ▼
+  collections/                 Generated Postman collection JSON
+  (e.g. java-data-api-tests.json)
+         │
+         ▼
+  docker-compose up            MySQL + Aerospike + java-data-api
+                               + flask-helper (setup/teardown)
+                               + newman-runner (executes collections)
+         │
+         ▼
+  runner/reports/              HTML test report
+```
+
+## Quick Start
+
+### 1. Get a free API key
+
+Go to [aistudio.google.com/apikey](https://aistudio.google.com/apikey) → sign in with Google → Create API key.
+
+### 2. Setup
+
+```sh
+cd java-data-api-testgen
+python3.11 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+
+cp .env.sample .env
+# Paste your key: OPENAI_API_KEY=AIza...
+```
+
+### 3. Generate test collections
+
+```sh
+# Verify parsing (no LLM call)
+python -m testgen analyze
+
+# Preview prompt (no LLM call)
+python -m testgen generate --dry-run
+
+# Generate → saves to collections/
+python -m testgen generate
+```
+
+### 4. Run the tests
+
+```sh
+# Start all services (databases + API + Flask helper)
+docker-compose up -d mysql aerospike java-data-api flask-helper
+
+# Run Newman against the generated collections
+docker-compose --profile run up newman-runner
+
+# Open the HTML report
+open runner/reports/*.html
+```
+
+Or run everything in one shot:
+```sh
+docker-compose --profile run up
+```
+
+## Project Structure
+
+```
+java-data-api-testgen/
+│
+├── testgen/                   Python package — AI core
+│   ├── analyzer/              Parse Java source (endpoints, models, schema)
+│   │   ├── code_reader.py
+│   │   ├── endpoint_parser.py
+│   │   ├── model_parser.py
+│   │   └── schema_parser.py
+│   ├── generator/             LLM integration
+│   │   ├── prompt_builder.py  System prompt + user context (includes Flask helper API)
+│   │   ├── llm_client.py      Async client, failover, self-healing retry loop
+│   │   └── collection_builder.py  Parse → validate → save
+│   ├── validator/
+│   │   └── validate.py        Structural validation of Postman JSON
+│   └── cli.py                 Entry point: python -m testgen
+│
+├── app/                       Flask test helper — MySQL + Aerospike setup/teardown
+│   ├── app.py
+│   ├── helpers.py             /setdb /query /aerospike/* endpoints
+│   ├── mysql_client.py
+│   ├── aerospike_client.py
+│   ├── requirements.txt
+│   └── Dockerfile
+│
+├── runner/                    Newman runner — executes collections, generates HTML report
+│   ├── src/
+│   │   ├── runner.js
+│   │   └── cli.js
+│   ├── package.json
+│   ├── reports/               Generated HTML reports
+│   └── Dockerfile
+│
+├── ui/
+│   └── streamlit_app.py       Visual UI — Analyze / Generate / Validate tabs
+│
+├── collections/               AI-generated Postman collections (testgen writes here)
+├── env/
+│   └── environment.json       Postman env vars (BASE_URL, HELPER_HOST, DB creds, etc.)
+│
+├── docker-compose.yml         Orchestrates everything
+├── config.yaml                LLM model, base_url, output path
+├── requirements.txt
+├── .env.sample
+└── README.md
+```
+
+## What the LLM Generates
+
+The generated collections use the Flask helper for **real setup and teardown** — not just raw API calls:
+
+- **DB Setup folder** — connects Flask helper to MySQL before tests run
+- **Aerospike Setup folder** — connects Flask helper to Aerospike
+- **Per-test pre-request scripts** — seed exactly the data each test needs using `/query`
+- **Per-test cleanup** — delete seeded data after assertions using `/query` or `/aerospike/deleteSingle`
+- **Assertions on DataResponse fields** — `success`, `data`, `message`
+
+Example generated test (GET /data/users/email/{email}):
+```js
+// Pre-request: seed test user
+pm.sendRequest({ url: HELPER + "/query", method: "POST",
+  body: { mode: "raw", raw: JSON.stringify({"1": "INSERT INTO users ...test_user@test.com..."}) }
+}, () => {});
+
+// Test: assert response
+pm.test("status 200", () => pm.response.to.have.status(200));
+pm.test("correct user returned", () => {
+  pm.expect(pm.response.json().data).to.include("test_user@test.com");
+});
+
+// Cleanup
+pm.sendRequest({ url: HELPER + "/query", method: "POST",
+  body: { mode: "raw", raw: JSON.stringify({"1": "DELETE FROM users WHERE email='test_user@test.com'"}) }
+}, () => {});
+```
+
+## Streamlit UI
+
+Prefer a visual interface? Run the Streamlit app instead of the CLI:
+
+```sh
+streamlit run ui/streamlit_app.py
+```
+
+Opens at `http://localhost:8501` with three tabs:
+- **Analyze** — parse the Java source, preview endpoints/models/schema, see token estimate
+- **Generate** — configure model + key, click Generate, download the collection, or dry-run to preview the prompt
+- **Validate** — upload or select a generated collection and check its structure
+
+## CLI Reference
+
+```
+python -m testgen generate                 Generate collections → collections/
+python -m testgen generate --dry-run       Preview prompt, skip LLM
+python -m testgen generate --feature Name  Custom collection name
+python -m testgen analyze                  Print parsed API surface
+python -m testgen validate collections/X.json
+```
+
+## LLM Configuration
+
+Default: **Google Gemini Flash** (free, no credit card).
+
+Switch in `config.yaml` + `.env`:
+
+```yaml
+# Groq (free tier, very fast)
+model: "llama-3.1-70b-versatile"
+base_url: "https://api.groq.com/openai/v1"
+# OPENAI_API_KEY=gsk_your_groq_key
+
+# OpenAI (paid, best quality)
+model: "gpt-4o"
+base_url: "https://api.openai.com/v1"
+# OPENAI_API_KEY=sk-...
+
+# Ollama (local, no key needed)
+model: "llama3.1"
+base_url: "http://localhost:11434/v1"
+# OPENAI_API_KEY=ollama
+```

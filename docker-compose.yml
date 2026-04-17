@@ -1,0 +1,95 @@
+services:
+
+  # ── Databases ──────────────────────────────────────────────────────────────
+
+  mysql:
+    image: mysql:8.0
+    container_name: testgen-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+    ports:
+      - "${MYSQL_EXPOSED_PORT:-3307}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ../java-data-api/src/main/resources/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+    command: --default-authentication-plugin=mysql_native_password
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  aerospike:
+    image: aerospike/aerospike-server:latest
+    container_name: testgen-aerospike
+    ports:
+      - "${AERO_EXPOSED_PORT:-3004}:3000"
+    environment:
+      - AEROSPIKE_NAMESPACE=${AERO_NAMESPACE:-test}
+    volumes:
+      - aerospike_data:/opt/aerospike/data
+
+  # ── System Under Test ──────────────────────────────────────────────────────
+
+  java-data-api:
+    build:
+      context: ../java-data-api
+      dockerfile: Dockerfile
+    container_name: testgen-sut
+    ports:
+      - "${APP_EXPOSED_PORT:-8080}:8080"
+    environment:
+      - SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/${MYSQL_DATABASE}?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true
+      - SPRING_DATASOURCE_USERNAME=root
+      - SPRING_DATASOURCE_PASSWORD=${MYSQL_ROOT_PASSWORD}
+      - AEROSPIKE_HOSTS_0_HOST=aerospike
+      - AEROSPIKE_HOSTS_0_PORT=3000
+    depends_on:
+      mysql:
+        condition: service_healthy
+      aerospike:
+        condition: service_started
+    restart: unless-stopped
+
+  # ── Flask Test Helper ──────────────────────────────────────────────────────
+
+  flask-helper:
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    container_name: testgen-helper
+    ports:
+      - "${HELPER_EXPOSED_PORT:-5000}:5000"
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      aerospike:
+        condition: service_started
+
+  # ── Newman Runner ──────────────────────────────────────────────────────────
+  # Runs all collections in collections/ and exits.
+  # Start AFTER running: python -m testgen generate
+
+  newman-runner:
+    build:
+      context: ./runner
+      dockerfile: Dockerfile
+    container_name: testgen-runner
+    volumes:
+      - ./collections:/runner/../collections:ro
+      - ./env:/runner/../env:ro
+      - ./runner/reports:/runner/reports
+    depends_on:
+      - java-data-api
+      - flask-helper
+    profiles:
+      - run   # only starts with: docker-compose --profile run up
+
+volumes:
+  mysql_data:
+  aerospike_data:

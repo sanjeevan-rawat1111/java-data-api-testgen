@@ -1,0 +1,18 @@
+{
+  "id": "java-data-api-testgen-env",
+  "name": "java-data-api-testgen Docker",
+  "values": [
+    { "key": "BASE_URL",       "value": "http://java-data-api:8080/api", "enabled": true },
+    { "key": "HELPER_HOST",    "value": "http://flask-helper:5000",      "enabled": true },
+    { "key": "DB_HOSTNAME",    "value": "mysql",                         "enabled": true },
+    { "key": "DB_PORT",        "value": "3306",                          "enabled": true },
+    { "key": "DB_USER",        "value": "root",                          "enabled": true },
+    { "key": "DB_PASS",        "value": "password",                      "enabled": true },
+    { "key": "DB_NAME",        "value": "mydatabase",                    "enabled": true },
+    { "key": "AERO_HOST",      "value": "aerospike",                     "enabled": true },
+    { "key": "AERO_PORT",      "value": "3000",                          "enabled": true },
+    { "key": "AERO_NAMESPACE", "value": "test",                          "enabled": true },
+    { "key": "AERO_SET",       "value": "users",                         "enabled": true }
+  ],
+  "_postman_variable_scope": "environment"
+}
