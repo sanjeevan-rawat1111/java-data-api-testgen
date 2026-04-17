@@ -19,7 +19,23 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 from typing import Any
+
+# Auto-load .env if present (so OPENAI_API_KEY is available without manual export)
+def _load_dotenv():
+    env_path = Path(".env")
+    if not env_path.exists():
+        env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, val = line.partition("=")
+                    os.environ.setdefault(key.strip(), val.strip())
+
+_load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +67,23 @@ class LLMClient:
     # ── Init ────────────────────────────────────────────────────────────────
 
     def _init_client(self) -> Any:
-        if self.provider == "openai":
+        if self.provider == "gemini":
+            # Native Google Generative AI SDK — uses API key only, no ADC conflict
+            try:
+                import google.generativeai as genai
+            except ImportError:
+                raise ImportError("Install: pip install google-generativeai")
+            api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
+            if not api_key:
+                raise EnvironmentError(
+                    "GOOGLE_API_KEY (or OPENAI_API_KEY) not set.\n"
+                    "  Get a free key at https://aistudio.google.com/apikey\n"
+                    "  Then set in .env:  GOOGLE_API_KEY=AIza..."
+                )
+            genai.configure(api_key=api_key)
+            return genai.GenerativeModel(self.model)
+
+        elif self.provider == "openai":
             try:
                 from openai import OpenAI
             except ImportError:
@@ -60,13 +92,9 @@ class LLMClient:
             if not api_key:
                 raise EnvironmentError(
                     "OPENAI_API_KEY is not set.\n"
-                    "  Free option: get a Google AI Studio key at https://aistudio.google.com/apikey\n"
-                    "  Then set in .env:\n"
-                    "    OPENAI_API_KEY=your-key\n"
-                    "    OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/"
+                    "  Free option: set provider: gemini in config.yaml and get a\n"
+                    "  Google AI Studio key at https://aistudio.google.com/apikey"
                 )
-            # Read base_url from config first, then fall back to env var
-            # This lets config.yaml override for Gemini / Groq / Ollama
             base_url = self._config.get("base_url") or os.environ.get("OPENAI_BASE_URL") or None
             return OpenAI(api_key=api_key, base_url=base_url)
 
@@ -81,7 +109,7 @@ class LLMClient:
             return anthropic.Anthropic(api_key=api_key)
 
         else:
-            raise ValueError(f"Unknown provider: {self.provider}")
+            raise ValueError(f"Unknown provider: {self.provider}. Valid: gemini, openai, anthropic")
 
     # ── Public: generate with API-level retry (backoff) ─────────────────────
 
@@ -94,7 +122,9 @@ class LLMClient:
         for attempt in range(1, self.max_retries + 1):
             try:
                 logger.debug("LLM call attempt %d/%d", attempt, self.max_retries)
-                if self.provider == "openai":
+                if self.provider == "gemini":
+                    return self._gemini_call(system_prompt, user_message)
+                elif self.provider == "openai":
                     return self._openai_call(system_prompt, user_message)
                 elif self.provider == "anthropic":
                     return self._anthropic_call(system_prompt, user_message)
@@ -190,11 +220,44 @@ class LLMClient:
         )
         return last_output, self.max_retries
 
-    # ── Internal LLM calls ───────────────────────────────────────────────────
+    # ── Internal LLM calls ────────────────────────────────────────────────────
+
+    def _gemini_call(self, system_prompt: str, user_message: str) -> str:
+        prompt = f"{system_prompt}\n\n{user_message}"
+        response = self._client.generate_content(
+            prompt,
+            generation_config={
+                "temperature": self.temperature,
+                "max_output_tokens": self.max_tokens,
+                "response_mime_type": "application/json",
+            },
+        )
+        return response.text
+
 
     def _call_with_messages(self, messages: list[dict]) -> str:
         """Call the provider with a full conversation history."""
-        if self.provider == "openai":
+        if self.provider == "gemini":
+            # Flatten conversation into a single prompt for Gemini
+            parts = []
+            for m in messages:
+                role = m["role"].upper()
+                if role == "SYSTEM":
+                    parts.append(m["content"])
+                else:
+                    parts.append(m["content"])
+            prompt = "\n\n".join(parts)
+            response = self._client.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": self.temperature,
+                    "max_output_tokens": self.max_tokens,
+                    "response_mime_type": "application/json",
+                },
+            )
+            return response.text
+
+        elif self.provider == "openai":
             response = self._client.chat.completions.create(
                 model=self.model,
                 temperature=self.temperature,

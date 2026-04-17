@@ -5,9 +5,9 @@ java_data_api_path: "../java-data-api"
 
 # ── LLM ──────────────────────────────────────────────────────────────────────
 # Default: Google Gemini Flash (FREE — get key at https://aistudio.google.com/apikey)
-provider: "openai"
+provider: "gemini"
 model: "gemini-1.5-flash"
-base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+# base_url not needed for native gemini provider
 temperature: 0.2
 max_tokens: 8192
 
