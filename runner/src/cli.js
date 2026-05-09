@@ -13,9 +13,29 @@ const { runCollection } = require("./runner");
 
 const BASE        = path.resolve(__dirname, "../..");
 const COLLECTIONS = path.join(BASE, "collections");
-const ENV_FILE    = path.join(BASE, "env/environment.json");
 // Optional: path for JSON results export (used by the Python debug loop)
 const JSON_OUT    = process.env.TESTGEN_JSON_OUT || null;
+
+/**
+ * Resolve the environment file to use.
+ *  --env <path>               explicit override (absolute or relative to BASE)
+ *  TESTGEN_ENV=docker         force Docker env (used by the newman-runner container)
+ *  default                    local.environment.json (Newman running on the Mac host)
+ */
+function resolveEnvFile(args) {
+  const envIdx = args.indexOf("--env");
+  if (envIdx !== -1 && args[envIdx + 1]) {
+    const p = args[envIdx + 1];
+    return path.isAbsolute(p) ? p : path.join(BASE, p);
+  }
+  if (process.env.TESTGEN_ENV === "docker") {
+    return path.join(BASE, "env/environment.json");
+  }
+  // Default: local env (localhost hostnames) for host-side Newman runs
+  return path.join(BASE, "env/local.environment.json");
+}
+
+const ENV_FILE = resolveEnvFile(process.argv.slice(2));
 
 async function runAll() {
   const files = await glob(`${COLLECTIONS}/*.json`);
