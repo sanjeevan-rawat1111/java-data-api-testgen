@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 endpoint_parser.py — extracts REST endpoint metadata from Java controller source.
 
@@ -76,6 +78,15 @@ def _source_for(annotation: str) -> str:
 
 
 def parse_endpoints(controller_content: str) -> list[dict]:
+    """Parse REST endpoints — uses AST parser (javalang) with regex fallback."""
+    try:
+        from testgen.analyzer.java_ast_parser import parse_endpoints_ast
+        return parse_endpoints_ast(controller_content)
+    except Exception:
+        return _parse_endpoints_regex(controller_content)
+
+
+def _parse_endpoints_regex(controller_content: str) -> list[dict]:
     base_path = _extract_base_path(controller_content)
     endpoints = []
 

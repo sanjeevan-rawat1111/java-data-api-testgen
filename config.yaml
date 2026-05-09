@@ -3,13 +3,27 @@
 # Path to the java-data-api repository (relative to this file or absolute)
 java_data_api_path: "../java-data-api"
 
-# ── LLM ──────────────────────────────────────────────────────────────────────
-# Default: Google Gemini Flash (FREE — get key at https://aistudio.google.com/apikey)
-provider: "gemini"
-model: "gemini-1.5-flash"
-# base_url not needed for native gemini provider
+# ── Generation LLM (heavy model — produces the Postman collection) ────────────
+# This is the primary model used for the initial test generation step.
+# Recommended: Claude Opus, GPT-4o, or any high-quality model.
+provider: "openai"
+model: "llama-3.3-70b-versatile"
+base_url: "https://api.groq.com/openai/v1"
 temperature: 0.2
-max_tokens: 8192
+max_tokens: 7500
+
+# ── Analysis LLM (fast model — self-healing corrections + diff analysis) ──────
+# Used for: self-healing correction retries, --diff mode context summarisation.
+# Recommended: Claude Sonnet, GPT-4o-mini — faster and cheaper than generation model.
+# Falls back to the generation model if not set.
+#
+# To use Anthropic Claude:
+#   analysis_provider: "anthropic"
+#   analysis_model: "claude-3-5-sonnet-20241022"
+#   (set ANTHROPIC_API_KEY in .env)
+analysis_provider: "openai"
+analysis_model: "llama-3.1-8b-instant"
+analysis_base_url: "https://api.groq.com/openai/v1"
 
 # Self-healing retry loop (generation)
 max_retries: 3

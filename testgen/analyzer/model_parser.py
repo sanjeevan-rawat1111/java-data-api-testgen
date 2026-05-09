@@ -15,18 +15,28 @@ Output shape:
 import re
 
 _FIELD_RE = re.compile(
-    r'((?:@\w+(?:\([^)]*\))?\s*)+)?'   # zero or more annotations
-    r'private\s+([\w<>]+)\s+(\w+)\s*;' # private Type name;
+    r'((?:@\w+(?:\([^)]*\))?\s*)+)?'       # zero or more annotations
+    r'private\s+([\w]+(?:<[^>]+>)?)\s+(\w+)\s*;'  # private Type<Generic> name;
 )
 
 _ANNOTATION_RE = re.compile(r'@\w+(?:\([^)]*\))?')
 
 
 def parse_models(models: dict) -> dict:
-    """
+    """Parse model fields — uses AST parser (javalang) with regex fallback.
+
     models: {"ClassName": "<java source>", ...}
     Returns: {"ClassName": [field dicts]}
     """
+    try:
+        from testgen.analyzer.java_ast_parser import parse_models_ast
+        return parse_models_ast(models)
+    except Exception:
+        return _parse_model_fields_regex(models)
+
+
+def _parse_model_fields_regex(models: dict) -> dict:
+    """Original regex-based model field extraction (used as fallback)."""
     result = {}
     for class_name, source in models.items():
         fields = []

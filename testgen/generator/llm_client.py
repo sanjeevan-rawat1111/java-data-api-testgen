@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 llm_client.py — LLM provider wrapper with self-healing retry logic.
 
@@ -7,8 +9,14 @@ Self-healing covers two failure modes:
                                 correction prompt and retries
 
 Supported providers (configured via config.yaml):
-  - openai   (default) — GPT-4o, GPT-4-turbo, GPT-3.5-turbo
-  - anthropic           — Claude 3.5 Sonnet, Claude 3 Haiku
+  - openai   (default) — GPT-4o, GPT-4-turbo, any OpenAI-compatible endpoint
+  - anthropic           — Claude Opus, Claude Sonnet, Claude Haiku
+
+Dual-model setup (generation vs analysis):
+  The generation model (model / provider) handles the primary Postman collection
+  generation step.  The analysis model (analysis_model / analysis_provider) is a
+  lighter, faster model used for self-healing correction retries and diff analysis.
+  If analysis_model is not set, the generation model is used for both roles.
 
 Environment variables:
   OPENAI_API_KEY    — required for openai provider
@@ -64,24 +72,50 @@ class LLMClient:
         self.retry_delay = float(config.get("retry_delay_seconds", 2.0))
         self._client     = self._init_client()
 
+    @classmethod
+    def make_analysis_client(cls, config: dict) -> "LLMClient":
+        """
+        Return a lighter LLMClient for self-healing corrections and diff analysis.
+
+        Uses analysis_model / analysis_provider / analysis_base_url from config
+        when set; falls back to the primary generation model if not configured.
+        This enables a dual-model pattern where a heavy model (e.g. Claude Opus)
+        handles generation while a faster model (e.g. Claude Sonnet) handles the
+        analysis and self-healing correction loops.
+        """
+        analysis_model    = config.get("analysis_model", "").strip()
+        analysis_provider = config.get("analysis_provider", "").strip()
+        analysis_base_url = config.get("analysis_base_url", "").strip()
+
+        if not analysis_model:
+            # No separate analysis model configured — reuse generation model
+            return cls(config)
+
+        # Build an override config for the analysis client
+        analysis_config = dict(config)
+        analysis_config["model"]    = analysis_model
+        analysis_config["provider"] = analysis_provider or config.get("provider", "openai")
+        if analysis_base_url:
+            analysis_config["base_url"] = analysis_base_url
+        return cls(analysis_config)
+
     # ── Init ────────────────────────────────────────────────────────────────
 
     def _init_client(self) -> Any:
         if self.provider == "gemini":
-            # Native Google Generative AI SDK — uses API key only, no ADC conflict
+            # New Google GenAI SDK (google-genai) — uses API key only, no ADC conflict
             try:
-                import google.generativeai as genai
+                from google import genai
             except ImportError:
-                raise ImportError("Install: pip install google-generativeai")
+                raise ImportError("Install: pip install google-genai")
             api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("OPENAI_API_KEY")
             if not api_key:
                 raise EnvironmentError(
-                    "GOOGLE_API_KEY (or OPENAI_API_KEY) not set.\n"
+                    "GOOGLE_API_KEY not set.\n"
                     "  Get a free key at https://aistudio.google.com/apikey\n"
                     "  Then set in .env:  GOOGLE_API_KEY=AIza..."
                 )
-            genai.configure(api_key=api_key)
-            return genai.GenerativeModel(self.model)
+            return genai.Client(api_key=api_key)
 
         elif self.provider == "openai":
             try:
@@ -149,21 +183,30 @@ class LLMClient:
         system_prompt: str,
         user_message: str,
         validate_fn=None,
+        analysis_client: "LLMClient | None" = None,
     ) -> tuple[str, int]:
         """
         Generate and self-heal if the output is not valid JSON or fails
         structural validation.
 
+        Dual-model flow:
+          - Attempt 1: uses *self* (the generation model, e.g. Claude Opus).
+          - Correction retries: uses *analysis_client* when provided (e.g. Claude
+            Sonnet), which is faster and cheaper for the analysis/fix task.
+            Falls back to *self* if analysis_client is None.
+
         Args:
-            system_prompt: LLM system prompt
-            user_message:  LLM user message
-            validate_fn:   Optional callable(str) -> list[str] of errors.
-                           If provided, a non-empty error list triggers a
-                           correction retry even when JSON is technically valid.
+            system_prompt:    LLM system prompt
+            user_message:     LLM user message
+            validate_fn:      Optional callable(str) -> list[str] of errors.
+                              A non-empty list triggers a correction retry.
+            analysis_client:  Optional lighter LLMClient for correction retries.
 
         Returns:
             (raw_output, attempts_used)
         """
+        healer = analysis_client or self
+
         conversation = [
             {"role": "system",  "content": system_prompt},
             {"role": "user",    "content": user_message},
@@ -171,10 +214,16 @@ class LLMClient:
 
         last_output = ""
         for attempt in range(1, self.max_retries + 1):
-            logger.info("Generation attempt %d/%d", attempt, self.max_retries)
+            is_correction = attempt > 1
+            active_client = healer if is_correction else self
+            logger.info(
+                "Generation attempt %d/%d [%s model]",
+                attempt, self.max_retries,
+                "analysis" if is_correction else "generation",
+            )
 
-            # Get LLM response for current conversation
-            raw = self._call_with_messages(conversation)
+            # Get LLM response — generation model on first attempt, analysis model on retries
+            raw = active_client._call_with_messages(conversation)
             last_output = raw
 
             # ── Check 1: is it parseable JSON? ──────────────────────────────
@@ -186,7 +235,6 @@ class LLMClient:
                         error=parse_error,
                         snippet=raw[:800],
                     )
-                    # Add assistant response + correction as next user turn
                     conversation.append({"role": "assistant", "content": raw})
                     conversation.append({"role": "user",      "content": correction})
                     time.sleep(self.retry_delay)
@@ -223,14 +271,15 @@ class LLMClient:
     # ── Internal LLM calls ────────────────────────────────────────────────────
 
     def _gemini_call(self, system_prompt: str, user_message: str) -> str:
-        prompt = f"{system_prompt}\n\n{user_message}"
-        response = self._client.generate_content(
-            prompt,
-            generation_config={
-                "temperature": self.temperature,
-                "max_output_tokens": self.max_tokens,
-                "response_mime_type": "application/json",
-            },
+        from google.genai import types
+        response = self._client.models.generate_content(
+            model=self.model,
+            contents=f"{system_prompt}\n\n{user_message}",
+            config=types.GenerateContentConfig(
+                temperature=self.temperature,
+                max_output_tokens=self.max_tokens,
+                response_mime_type="application/json",
+            ),
         )
         return response.text
 
@@ -238,22 +287,16 @@ class LLMClient:
     def _call_with_messages(self, messages: list[dict]) -> str:
         """Call the provider with a full conversation history."""
         if self.provider == "gemini":
-            # Flatten conversation into a single prompt for Gemini
-            parts = []
-            for m in messages:
-                role = m["role"].upper()
-                if role == "SYSTEM":
-                    parts.append(m["content"])
-                else:
-                    parts.append(m["content"])
-            prompt = "\n\n".join(parts)
-            response = self._client.generate_content(
-                prompt,
-                generation_config={
-                    "temperature": self.temperature,
-                    "max_output_tokens": self.max_tokens,
-                    "response_mime_type": "application/json",
-                },
+            from google.genai import types
+            prompt = "\n\n".join(m["content"] for m in messages)
+            response = self._client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=self.temperature,
+                    max_output_tokens=self.max_tokens,
+                    response_mime_type="application/json",
+                ),
             )
             return response.text
 

@@ -7,6 +7,7 @@ models so the LLM regenerates only what actually changed.
 """
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from testgen.analyzer.endpoint_parser import parse_endpoints
@@ -112,8 +113,25 @@ def build_diff_context(diff_source: dict) -> str:
     if diff_source["controllers"]:
         parts.append("=== CHANGED REST ENDPOINTS ===")
         parts.append("Generate or update tests ONLY for these endpoints:")
-        for ctrl in diff_source["controllers"]:
-            for ep in parse_endpoints(ctrl["content"]):
+
+        controllers = diff_source["controllers"]
+
+        # Parse changed controllers in parallel
+        if len(controllers) <= 1:
+            endpoint_lists = [parse_endpoints(c["content"]) for c in controllers]
+        else:
+            endpoint_lists = [None] * len(controllers)
+            with ThreadPoolExecutor(max_workers=min(len(controllers), 8)) as executor:
+                futures = {
+                    executor.submit(parse_endpoints, ctrl["content"]): idx
+                    for idx, ctrl in enumerate(controllers)
+                }
+                for future in as_completed(futures):
+                    idx = futures[future]
+                    endpoint_lists[idx] = future.result()
+
+        for ep_list in endpoint_lists:
+            for ep in (ep_list or []):
                 line = f"{ep['method']:7} {ep['path']}"
                 if ep["description"]:
                     line += f"\n  description: {ep['description']}"
@@ -125,7 +143,13 @@ def build_diff_context(diff_source: dict) -> str:
 
     if diff_source["models"]:
         parts.append("\n=== CHANGED DATA MODELS ===")
-        models = parse_models(diff_source["models"])
+        # diff_source["models"] is a list of {"file": ..., "content": ...}
+        # parse_models expects a dict of {ClassName: source}
+        models_dict = {
+            Path(item["file"]).stem: item["content"]
+            for item in diff_source["models"]
+        }
+        models = parse_models(models_dict)
         parts.append(models_to_text(models))
 
     if diff_source["schema_sql"]:

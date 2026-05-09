@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 newman_runner.py — Python wrapper around Newman for programmatic test execution.
 
@@ -62,7 +64,7 @@ def _ensure_npm_deps(runner_dir: str):
 
 def run_collection(
     collection_path: str,
-    env_path: str,
+    env_path: str = "env/local.environment.json",
     runner_dir: str = "runner",
 ) -> RunResult:
     """
@@ -114,7 +116,7 @@ def run_collection(
 
 def run_all_collections(
     collections_dir: str = "collections",
-    env_path: str = "env/environment.json",
+    env_path: str = "env/local.environment.json",
     runner_dir: str = "runner",
 ) -> list[RunResult]:
     """Run all collections in collections_dir and return results list."""

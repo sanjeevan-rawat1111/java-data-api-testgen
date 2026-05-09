@@ -1,6 +1,11 @@
 # LLM (install the one you use)
+google-genai>=1.0.0
 openai>=1.30.0
 anthropic>=0.25.0
+
+# Java AST parser — used by java_ast_parser.py for accurate Spring Boot parsing
+# Falls back to regex automatically if not installed
+javalang>=0.13.0
 
 # Config
 pyyaml>=6.0.1

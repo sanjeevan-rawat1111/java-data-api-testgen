@@ -36,7 +36,11 @@ jobs:
       - name: Run unit tests
         run: |
           pip install pytest
-          pytest tests/ -v --tb=short 2>/dev/null || echo "No tests directory found — skipping"
+          if [ -d "tests" ]; then
+            pytest tests/ -v --tb=short
+          else
+            echo "No tests directory found — skipping"
+          fi
 
   # ── Job 2: dry-run generation (no LLM key needed) ───────────────────────────
   dry-run:

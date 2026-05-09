@@ -148,18 +148,28 @@ def _cmd_generate_diff(args, config, repo_root, output_dir, feature, base_ref):
 
 def _call_llm_and_save(config, user_message, feature, output_dir, silent=False):
     max_retries = config.get("max_retries", 3)
+    gen_model      = config.get("model", "gemini-1.5-flash")
+    analysis_model = config.get("analysis_model", "")
+    provider       = config.get("provider", "openai")
+
     if not silent:
-        print(f"[3/3] Calling LLM ({config.get('provider','openai')} / {config.get('model','gemini-1.5-flash')}) "
-              f"— self-healing enabled (max {max_retries} attempts)...")
+        label = f"{provider} / {gen_model}"
+        if analysis_model:
+            label += f"  (analysis: {config.get('analysis_provider', provider)} / {analysis_model})"
+        print(f"[3/3] Calling LLM ({label}) — self-healing enabled (max {max_retries} attempts)...")
     else:
         print(f"[3/3] Calling LLM for changed endpoints ({max_retries} max attempts)...")
 
+    gen_client      = LLMClient(config)
+    analysis_client = LLMClient.make_analysis_client(config)
+
     result = build_and_save_with_healing(
-        llm_client=LLMClient(config),
+        llm_client=gen_client,
         system_prompt=SYSTEM_PROMPT,
         user_message=user_message,
         feature_name=feature,
         output_dir=output_dir,
+        analysis_client=analysis_client,
     )
 
     if not silent:
@@ -239,7 +249,7 @@ def cmd_run(args, config: dict):
 
         results = run_all_collections(
             collections_dir=output_dir,
-            env_path="env/environment.json",
+            env_path="env/local.environment.json",
             runner_dir="runner",
         )
 
@@ -276,11 +286,21 @@ def cmd_run(args, config: dict):
                 user_message=user_msg,
             )
             try:
-                fixed = json.loads(raw)
-                with open(col_path, "w") as f:
-                    json.dump(fixed, f, indent=2)
-                healed = " (self-healed)" if attempts_used > 1 else ""
-                print(f"  ✔ Fixed collection saved: {col_path.name}{healed}")
+                fixed_items = json.loads(raw)
+                # LLM returns a JSON array of fixed request items.
+                # Merge them back into the original collection by name.
+                if isinstance(fixed_items, dict) and "item" in fixed_items:
+                    fixed_items = fixed_items["item"]   # graceful if LLM returned full collection
+                if isinstance(fixed_items, list):
+                    _merge_fixed_items(collection, fixed_items)
+                    from testgen.generator.collection_builder import enrich_collection
+                    collection = enrich_collection(collection, Path(col_path).stem)
+                    with open(col_path, "w") as f:
+                        json.dump(collection, f, indent=2)
+                    healed = " (self-healed)" if attempts_used > 1 else ""
+                    print(f"  ✔ Fixed items merged into {col_path.name}{healed}")
+                else:
+                    print(f"  ✖ LLM returned unexpected structure for {col_path.name}")
             except json.JSONDecodeError as e:
                 print(f"  ✖ LLM returned invalid JSON for {col_path.name}: {e}")
 
@@ -298,6 +318,23 @@ def cmd_run(args, config: dict):
         subprocess.run(["open", str(latest)], capture_output=True)
 
     sys.exit(0 if all_passed else 1)
+
+
+def _merge_fixed_items(collection: dict, fixed_items: list) -> None:
+    """
+    Replace items in the collection whose name matches a fixed item.
+    Walks the item tree recursively so items inside folders are updated too.
+    """
+    fixed_by_name = {item["name"]: item for item in fixed_items if "name" in item}
+
+    def walk(items: list) -> None:
+        for i, item in enumerate(items):
+            if "item" in item:
+                walk(item["item"])
+            elif item.get("name") in fixed_by_name:
+                items[i] = fixed_by_name[item["name"]]
+
+    walk(collection.get("item", []))
 
 
 def _banner(text: str):
