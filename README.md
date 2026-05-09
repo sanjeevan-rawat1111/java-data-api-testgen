@@ -4,6 +4,65 @@ AI-powered test automation framework for [java-data-api](../java-data-api).
 
 LLM reads the Java source code → generates Postman test collections with real setup/teardown → Newman runs them against the live API in Docker.
 
+## Architecture
+
+```mermaid
+flowchart TD
+    CLI["🖥️ CLI\npython -m testgen\ngenerate | diff | analyze | validate | run"]
+    CICD["⚙️ CI/CD\nGitHub Actions\nlint → dry-run → generate → validate"]
+
+    CLI --> ORC
+    CICD -.-> ORC
+
+    ORC["🎛️ cli.py — Orchestrator"]
+
+    subgraph ANALYZER["📂 ANALYZER"]
+        CR["code_reader.py\nparallel file I/O"]
+        DR["diff_reader.py\ngit diff + parallel parse"]
+        EP["endpoint_parser.py\nAST → regex fallback"]
+        AST["java_ast_parser.py ★\njavalang AST"]
+        MP["model_parser.py\nmodel fields"]
+        SP["schema_parser.py\nSQL DDL"]
+        EP --> AST
+    end
+
+    subgraph GENERATOR["⚡ GENERATOR"]
+        PB["prompt_builder.py\nbuild LLM message"]
+        LC["llm_client.py\ndual-model client"]
+        CB["collection_builder.py\nparse → validate → enrich → write"]
+        DB["debug_builder.py\nself-debug context"]
+    end
+
+    subgraph LLM["🤖 LLM PROVIDERS"]
+        GM["Generation Model\nClaude Opus / llama-3.3-70b\n(1st attempt)"]
+        AM["Analysis Model\nClaude Sonnet / llama-3.1-8b\n(self-healing retries)"]
+        GM <-->|self-healing loop| AM
+    end
+
+    subgraph RUNNER["🏃 RUNNER"]
+        NR["newman_runner.py\nPython wrapper"]
+        NJ["runner/ Node.js + Newman\nexecutes collections"]
+    end
+
+    ORC --> CR & DR & PB
+    CR & DR --> EP & MP & SP
+    PB --> LC
+    LC -->|attempt 1| GM
+    LC -.->|corrections| AM
+    LC --> CB
+    CB --> OUT["📄 collections/*.json\nPostman Collection v2.1.0"]
+
+    subgraph EXTERNAL["🌐 EXTERNAL SYSTEMS"]
+        SUT["Java-Data-API\nSpring Boot (SUT)"]
+        API["Groq / Anthropic / OpenAI"]
+        FH["Flask Helper app/\nMySQL + Aerospike"]
+    end
+
+    LC <--> API
+    NR --> NJ --> FH --> SUT
+    OUT --> NR
+```
+
 ## How It Works
 
 ```
@@ -12,11 +71,12 @@ java-data-api/
          │
          ▼
   testgen/analyzer/            Parse: endpoints, models, DB schema
-         │
+         │                     (AST-based with javalang, regex fallback)
+         │                     (parallel parsing via ThreadPoolExecutor)
          ▼
-  testgen/generator/           Build LLM prompt (with Flask helper context)
-         │                     Call LLM (Gemini / OpenAI / Groq / Ollama)
-         │                     Self-healing retry on bad JSON output
+  testgen/generator/           Build LLM prompt
+         │                     Generation model  → produce collection (attempt 1)
+         │                     Analysis model    → self-healing corrections
          ▼
   collections/                 Generated Postman collection JSON
   (e.g. java-data-api-tests.json)
